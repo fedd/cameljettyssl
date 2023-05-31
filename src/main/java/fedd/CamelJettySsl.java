@@ -31,36 +31,31 @@ public class CamelJettySsl {
     private static final String JETTYINSECURE = "jetty-insecure";
 
     public static void main(String[] args) throws Exception {
-        Main main = new Main();
 
+        // starting camel
+        Main main = new Main();
         main.start();
 
+        // getting context
         CamelContext camelContext = main.getCamelContext();
 
-        JettyHttpComponent jetty = camelContext.getComponent(JETTY, JettyHttpComponent.class);
-        final JettyHttpComponent jettyInsecure;
-        try {
-            jettyInsecure = new JettyHttpComponent9();
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-        camelContext.addComponent(JETTYINSECURE, jettyInsecure);
+        // creating another jetty component for insecure access. So there are two jettys, one for http another for https
+        // see https://stackoverflow.com/questions/67920367/create-http-and-https-endpoint-using-camel-in-the-same-server-with-jetty
+        camelContext.addComponent(JETTYINSECURE, new JettyHttpComponent9());
 
-        HttpSessionListener _sessionListener = new HttpSessionListener() {
-
+        HttpSessionListener sessionListener = new HttpSessionListener() {
             @Override
             public void sessionCreated(HttpSessionEvent se) {
-                System.out.println("SESSIONSTARTED");
+                System.out.println("-----------------------SESSIONSTARTED-----------------------");
             }
 
             @Override
             public void sessionDestroyed(HttpSessionEvent se) {
-                System.out.println("SESSIONDESTROYED");
+                System.out.println("-----------------------SESSIONDESTROYED-----------------------");
             }
-
         };
 
-        // ssl
+        // ssl magik. doesn't work, but used to work on old java and camel
         File keyStoreFile = new File("dela.p12");
         if (keyStoreFile.exists()) {
             String keystorePassword = "someSecretPassword";
@@ -74,6 +69,8 @@ public class CamelJettySsl {
             kmp.setKeyStore(ksp);
             kmp.setKeyPassword("someSecretPassword");
             scp.setKeyManagers(kmp);
+
+            JettyHttpComponent jetty = camelContext.getComponent(JETTY, JettyHttpComponent.class);
             jetty.setSslContextParameters(scp);
         }
 
@@ -94,8 +91,8 @@ public class CamelJettySsl {
         final SessionHandler sessHttps = new SessionHandler();
         String sessionHandlerHttpsString = "jettySessionHandlerHttps";
         camelContext.getRegistry().bind(sessionHandlerHttpsString, sessHttps);
-        sess.addEventListener(_sessionListener);
-        sessHttps.addEventListener(_sessionListener);
+        sess.addEventListener(sessionListener);
+        sessHttps.addEventListener(sessionListener);
 
         RouteBuilder rb = new RouteBuilder(camelContext) {
             @Override
