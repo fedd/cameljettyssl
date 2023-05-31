@@ -7,6 +7,7 @@ import java.io.File;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSessionEvent;
 import javax.servlet.http.HttpSessionListener;
+import org.apache.camel.CamelConfiguration;
 import org.apache.camel.CamelContext;
 import org.apache.camel.Exchange;
 import org.apache.camel.Processor;
@@ -34,72 +35,83 @@ public class CamelJettySsl {
 
         // starting camel
         Main main = new Main();
-        main.start();
 
-        // getting context
-        CamelContext camelContext = main.getCamelContext();
-
-        // creating another jetty component for insecure access. So there are two jettys, one for http another for https
-        // see https://stackoverflow.com/questions/67920367/create-http-and-https-endpoint-using-camel-in-the-same-server-with-jetty
-        camelContext.addComponent(JETTYINSECURE, new JettyHttpComponent9());
-
-        HttpSessionListener sessionListener = new HttpSessionListener() {
+        main.configure().addConfiguration(new CamelConfiguration() {
             @Override
-            public void sessionCreated(HttpSessionEvent se) {
-                System.out.println("-----------------------SESSIONSTARTED-----------------------");
+            public void configure(CamelContext camelContext) throws Exception {
             }
 
-            @Override
-            public void sessionDestroyed(HttpSessionEvent se) {
-                System.out.println("-----------------------SESSIONDESTROYED-----------------------");
-            }
-        };
+        });
 
-        // ssl magik. doesn't work, but used to work on old java and camel
-        File keyStoreFile = new File("dela.p12");
-        if (keyStoreFile.exists()) {
-            String keystorePassword = "someSecretPassword";
-            SSLContextParameters scp = new SSLContextParameters();
-            KeyStoreParameters ksp = new KeyStoreParameters();
-            ksp.setCamelContext(camelContext);
-            ksp.setResource(keyStoreFile.getPath());
-            ksp.setPassword(keystorePassword);
-            ksp.setType("pkcs12");
-            KeyManagersParameters kmp = new KeyManagersParameters();
-            kmp.setKeyStore(ksp);
-            kmp.setKeyPassword("someSecretPassword");
-            scp.setKeyManagers(kmp);
+        main.configure().addRoutesBuilder(new RouteBuilder() {
 
-            JettyHttpComponent jetty = camelContext.getComponent(JETTY, JettyHttpComponent.class);
-            jetty.setSslContextParameters(scp);
-        }
-
-        // rest
-        {
-            final RestConfiguration restConfiguration = new RestConfiguration();
-            restConfiguration.setHost("0.0.0.0");
-            restConfiguration.setPort(8543);
-            restConfiguration.setScheme("https");
-            //restConfiguration.setComponent(restPort == _sslPort ? JETTY : JETTYINSECURE); //-- it doesn't expect jetty but a restlet impl
-            restConfiguration.setBindingMode(RestConfiguration.RestBindingMode.auto);
-            camelContext.setRestConfiguration(restConfiguration);
-        }
-
-        final SessionHandler sess = new SessionHandler();
-        String sessionHandlerString = "jettySessionHandler";
-        camelContext.getRegistry().bind(sessionHandlerString, sess);
-        final SessionHandler sessHttps = new SessionHandler();
-        String sessionHandlerHttpsString = "jettySessionHandlerHttps";
-        camelContext.getRegistry().bind(sessionHandlerHttpsString, sessHttps);
-        sess.addEventListener(sessionListener);
-        sessHttps.addEventListener(sessionListener);
-
-        RouteBuilder rb = new RouteBuilder(camelContext) {
             @Override
             public void configure() throws Exception {
 
-                Processor dispatcher = new Processor() {
+                // creating another jetty component for insecure access. So there are two jettys, one for http another for https
+                // see https://stackoverflow.com/questions/67920367/create-http-and-https-endpoint-using-camel-in-the-same-server-with-jetty
+                getCamelContext().addComponent(JETTYINSECURE, new JettyHttpComponent9());
 
+                // ssl magik. doesn't work, but used to work on old java and camel
+                File keyStoreFile = new File("dela.p12");
+                if (keyStoreFile.exists()) {
+                    String keystorePassword = "someSecretPassword";
+                    SSLContextParameters scp = new SSLContextParameters();
+                    KeyStoreParameters ksp = new KeyStoreParameters();
+                    ksp.setCamelContext(getCamelContext());
+                    ksp.setResource(keyStoreFile.getPath());
+                    ksp.setPassword(keystorePassword);
+                    ksp.setType("pkcs12");
+                    KeyManagersParameters kmp = new KeyManagersParameters();
+                    kmp.setKeyStore(ksp);
+                    kmp.setKeyPassword("someSecretPassword");
+                    scp.setKeyManagers(kmp);
+
+                    // add the SSL only to the secure jetty
+                    JettyHttpComponent jetty = getCamelContext().getComponent(JETTY, JettyHttpComponent.class);
+                    jetty.setSslContextParameters(scp);
+                }
+
+                // rest. This will use the secure jetty (based on the port number)
+                {
+                    final RestConfiguration restConfiguration = new RestConfiguration();
+                    restConfiguration.setHost("0.0.0.0");
+                    restConfiguration.setPort(8543);
+                    restConfiguration.setScheme("https");
+                    //restConfiguration.setComponent(restPort == _sslPort ? JETTY : JETTYINSECURE); //-- it doesn't expect jetty but a restlet impl
+                    restConfiguration.setBindingMode(RestConfiguration.RestBindingMode.auto);
+                    getCamelContext().setRestConfiguration(restConfiguration);
+                }
+
+                // Jetty style session handlers. They can't be reused in both components of jetty, so there are two of them
+                // this one for the insecure jetty
+                final SessionHandler sess = new SessionHandler();
+                String sessionHandlerString = "jettySessionHandler";
+                getCamelContext().getRegistry().bind(sessionHandlerString, sess); // supposed to make it available to the "from" uri
+                // thsi one for the https jetty
+                final SessionHandler sessHttps = new SessionHandler();
+                String sessionHandlerHttpsString = "jettySessionHandlerHttps";
+                getCamelContext().getRegistry().bind(sessionHandlerHttpsString, sessHttps);
+
+                // a standard session listener that will be invoked by the jetty handlers (see below)
+                // TODO: doesn't work
+                HttpSessionListener sessionListener = new HttpSessionListener() {
+                    @Override
+                    public void sessionCreated(HttpSessionEvent se) {
+                        System.out.println("-----------------------SESSIONSTARTED-----------------------");
+                    }
+
+                    @Override
+                    public void sessionDestroyed(HttpSessionEvent se) {
+                        System.out.println("-----------------------SESSIONDESTROYED-----------------------");
+                    }
+                };
+                // this object can be used in both copies of jetty component
+                sess.addEventListener(sessionListener);
+                sessHttps.addEventListener(sessionListener);
+
+                // a simple home grown dispatcher for the catch-all uri path
+                Processor dispatcher = new Processor() {
                     @Override
                     public void process(Exchange exchange) throws Exception {
                         HttpMessage http = exchange.getIn(HttpMessage.class);
@@ -118,21 +130,18 @@ public class CamelJettySsl {
                     }
                 };
 
-                // initialize server with https and http
-                from(JETTY + ":https://0.0.0.0:8543?matchOnUriPrefix=true&enableMultipartFilter=true&handlers=jettySessionHandlerHttps")
+                // initialize two jettys with https and http
+                // session handler doesn't get invoked (neither with nor without the #hash)
+                from(JETTY + ":https://0.0.0.0:8543?matchOnUriPrefix=true&enableMultipartFilter=true&handlers=#jettySessionHandlerHttps")
                         .process(dispatcher);
 
-                from(JETTYINSECURE + ":http://0.0.0.0:8585?matchOnUriPrefix=true&enableMultipartFilter=true&handlers=jettySessionHandler")
+                from(JETTYINSECURE + ":http://0.0.0.0:8585?matchOnUriPrefix=true&enableMultipartFilter=true&handlers=#jettySessionHandler")
                         .process(dispatcher);
 
             }
-        };
+        });
 
-        try {
-            camelContext.addRoutes(rb);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        main.run();
 
     }
 }
