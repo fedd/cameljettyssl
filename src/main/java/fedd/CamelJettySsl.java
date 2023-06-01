@@ -4,6 +4,10 @@
 package fedd;
 
 import java.io.File;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.KeyStore;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSessionEvent;
 import javax.servlet.http.HttpSessionListener;
@@ -58,10 +62,11 @@ public class CamelJettySsl {
                     String keystorePassword = "someSecretPassword";
                     SSLContextParameters scp = new SSLContextParameters();
                     KeyStoreParameters ksp = new KeyStoreParameters();
-                    ksp.setCamelContext(getCamelContext());
-                    ksp.setResource(keyStoreFile.getPath());
-                    ksp.setPassword(keystorePassword);
-                    ksp.setType("pkcs12");
+                    var ks = KeyStore.getInstance("JKS");
+                    try (var stream = Files.newInputStream(Path.of(keyStoreFile.getPath()))) {
+                        ks.load(stream, keystorePassword.toCharArray());
+                    }
+                    ksp.setKeyStore(ks);
                     KeyManagersParameters kmp = new KeyManagersParameters();
                     kmp.setKeyStore(ksp);
                     kmp.setKeyPassword("someSecretPassword");
