@@ -1,6 +1,9 @@
 package fedd;
 
 import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.KeyStore;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSessionEvent;
 import javax.servlet.http.HttpSessionListener;
@@ -40,15 +43,23 @@ public class CamelJettySsl {
                 // see https://stackoverflow.com/questions/67920367/create-http-and-https-endpoint-using-camel-in-the-same-server-with-jetty
                 getContext().addComponent(JETTYINSECURE, new JettyHttpComponent9());
 
-                // ssl magik. doesn't work, but used to work on old java and camel
                 File keyStoreFile = new File("dela.p12"); // also tried jks
                 if (keyStoreFile.exists()) {
                     String keystorePassword = "someSecretPassword";
                     KeyStoreParameters ksp = new KeyStoreParameters();
                     //ksp.setCamelContext(getContext());
-                    ksp.setResource(keyStoreFile.getPath());
-                    ksp.setPassword(keystorePassword);
-                    ksp.setType("pkcs12"); // also tried to use the default
+
+                    // worked in Camel 2 but doesn't work now
+                    //ksp.setResource(keyStoreFile.getPath());
+                    //ksp.setPassword(keystorePassword);
+                    //ksp.setType("pkcs12"); // also tried to use the default
+                    
+                    // it works like this now
+                    KeyStore ks = KeyStore.getInstance("pkcs12");
+                    try (var stream = Files.newInputStream(Path.of(keyStoreFile.getPath()))) {
+                        ks.load(stream, keystorePassword.toCharArray());
+                    }
+                    ksp.setKeyStore(ks);
 
                     KeyManagersParameters kmp = new KeyManagersParameters();
                     kmp.setKeyStore(ksp);
@@ -77,11 +88,11 @@ public class CamelJettySsl {
                 // this one for the insecure jetty
                 final SessionHandler sess = new SessionHandler();
                 String sessionHandlerString = "jettySessionHandler";
-                getContext().getRegistry().bind(sessionHandlerString, sess); // supposed to make it available to the "from" uri
+                bindToRegistry(sessionHandlerString, sess); // supposed to make it available to the "from" uri
                 // thsi one for the https jetty
                 final SessionHandler sessHttps = new SessionHandler();
                 String sessionHandlerHttpsString = "jettySessionHandlerHttps";
-                getContext().getRegistry().bind(sessionHandlerHttpsString, sessHttps);
+                bindToRegistry(sessionHandlerHttpsString, sessHttps);
 
                 // a standard session listener that will be invoked by the jetty handlers (see below)
                 // TODO: doesn't work
@@ -122,10 +133,10 @@ public class CamelJettySsl {
 
                 // initialize two jettys with https and http
                 // session handler doesn't get invoked (neither with nor without the #hash)
-                from(JETTY + ":https://0.0.0.0:8543?matchOnUriPrefix=true&enableMultipartFilter=true&handlers=#jettySessionHandlerHttps")
+                from(JETTY + ":https://0.0.0.0:8543?matchOnUriPrefix=true&enableMultipartFilter=true&sessionSupport=true&handlers=" + sessionHandlerHttpsString)
                         .process(dispatcher);
 
-                from(JETTYINSECURE + ":http://0.0.0.0:8585?matchOnUriPrefix=true&enableMultipartFilter=true&handlers=#jettySessionHandler")
+                from(JETTYINSECURE + ":http://0.0.0.0:8585?matchOnUriPrefix=true&enableMultipartFilter=true&sessionSupport=true&handlers=" + sessionHandlerString)
                         .process(dispatcher);
 
             }
