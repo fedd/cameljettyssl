@@ -5,6 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyStore;
 import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpSession;
 import javax.servlet.http.HttpSessionEvent;
 import javax.servlet.http.HttpSessionListener;
 import org.apache.camel.Exchange;
@@ -95,16 +96,17 @@ public class CamelJettySsl {
                 bindToRegistry(sessionHandlerHttpsString, sessHttps);
 
                 // a standard session listener that will be invoked by the jetty handlers (see below)
-                // TODO: doesn't work
                 HttpSessionListener sessionListener = new HttpSessionListener() {
                     @Override
                     public void sessionCreated(HttpSessionEvent se) {
                         System.out.println("-----------------------SESSIONSTARTED-----------------------");
+                        se.getSession().setAttribute("iminsession", "I'm in session");
                     }
 
                     @Override
                     public void sessionDestroyed(HttpSessionEvent se) {
                         System.out.println("-----------------------SESSIONDESTROYED-----------------------");
+                        se.getSession().removeAttribute("iminsession");
                     }
                 };
                 // this object can be used in both copies of jetty component
@@ -121,22 +123,31 @@ public class CamelJettySsl {
                         String method = request.getMethod();
                         request.isSecure();
                         HttpMessage msg = exchange.getIn(HttpMessage.class);
+                        
+                        HttpSession session = msg.getRequest().getSession();
+                        String sess;
+                        if(session!=null){
+                            sess = (String) session.getAttribute("iminsession ");
+                        }else{
+                            sess = "no session:( ";
+                        }
+                        
                         if (uripath.startsWith("/res/")) {
-                            msg.setBody("resource: " + uripath.substring("/res/".length()) + " " + (request.isSecure() ? "secure" : "insecure"));
+                            msg.setBody(sess + "resource: " + uripath.substring("/res/".length()) + " " + (request.isSecure() ? "secure" : "insecure"));
                         } else if ("POST".equals(method) || "PUT".equals(method)) {
-                            msg.setBody("POSTED " + (request.isSecure() ? "secure" : "insecure"));
+                            msg.setBody(sess + "POSTED " + (request.isSecure() ? "secure" : "insecure"));
                         } else {
-                            msg.setBody("HOORAY " + (request.isSecure() ? "secure" : "insecure"));
+                            msg.setBody(sess + "HOORAY " + (request.isSecure() ? "secure" : "insecure"));
                         }
                     }
                 };
 
                 // initialize two jettys with https and http
                 // session handler doesn't get invoked (neither with nor without the #hash)
-                from(JETTY + ":https://0.0.0.0:8543?matchOnUriPrefix=true&enableMultipartFilter=true&sessionSupport=true&handlers=" + sessionHandlerHttpsString)
+                from(JETTY + ":https://0.0.0.0:8543?matchOnUriPrefix=true&enableMultipartFilter=true&handlers=" + sessionHandlerHttpsString)
                         .process(dispatcher);
 
-                from(JETTYINSECURE + ":http://0.0.0.0:8585?matchOnUriPrefix=true&enableMultipartFilter=true&sessionSupport=true&handlers=" + sessionHandlerString)
+                from(JETTYINSECURE + ":http://0.0.0.0:8585?matchOnUriPrefix=true&enableMultipartFilter=true&handlers=" + sessionHandlerString)
                         .process(dispatcher);
 
             }
